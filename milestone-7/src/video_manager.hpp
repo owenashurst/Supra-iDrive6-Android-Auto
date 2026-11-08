@@ -5,6 +5,7 @@
 
 #include "screen_video.h"
 #include "mmr_launch.hpp"
+#include "frame_queue.hpp"
 #include <stdint.h>
 #include <stddef.h>
 #include <pthread.h>
@@ -98,15 +99,7 @@ public:
     void onVideoFrameReceived(uint32_t frame_index, size_t byte_len);
 
 private:
-    struct VideoQueueItem {
-        std::vector<uint8_t> data;
-        uint64_t pts;
-        bool is_config;
-        bool is_idr;
-        bool has_inline_config;
-        size_t raw_size;
-        size_t inline_config_size;
-    };
+    // VideoQueueItem and the queue itself: frame_queue.hpp.
 
     static void* workerThreadStub(void* arg);
     void workerLoop();
@@ -163,7 +156,7 @@ private:
     bool aa_surface_logged_;        // ... and its state + the layer's render order were logged once while shown
     unsigned aa_surface_ticks_;     // serviceAaSurface() calls since the window was created
     void verifyOverlayOrder();
-    std::vector<VideoQueueItem> frame_queue_;
+    FrameQueue frame_queue_;            // guarded by queue_mutex_
     std::vector<uint8_t> cached_codec_config_;
 };
 

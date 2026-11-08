@@ -835,14 +835,21 @@ static void* wirelessThread(void*) {
     // No Android Auto Bluetooth link for a while although the phone may be connected over Bluetooth (MINI F60:
     // cold start, and after the head unit slept): register the Bluetooth service again, as Restart does.
     nbt::SppReregTimer rereg;
-    rereg.configure(nbt::sppReregBaseSec());
-    if (rereg.enabled())
+    rereg.configure(nbt::sppReregBaseSec(), nbt::sppReregMaxSec());
+    if (rereg.enabled()) {
         printf("[Wireless] while no phone opens the Android Auto Bluetooth link, the Bluetooth service is registered "
                "again (like Restart does) every %d s for %d s, then every %d s (NBT_SPP_REREG_S=0 turns this off)\n",
                nbt::sppReregBaseSec(), nbt::kSppReregFastPhaseSec,
                nbt::sppReregIntervalSec(1 << 20, nbt::sppReregBaseSec()));
-    else
+        if (rereg.maxSec() > 0)
+            printf("[Wireless] ... for at most %d s per idle period, then it stops until a link or session ends "
+                   "(NBT_SPP_REREG_MAX_S, 0 = no limit)\n", rereg.maxSec());
+        else
+            printf("[Wireless] ... with no time limit (NBT_SPP_REREG_MAX_S=0)\n");
+    } else {
         printf("[Wireless] automatic Bluetooth service re-registration off (NBT_SPP_REREG_S=0)\n");
+    }
+    bool reregGaveUpLogged = false;
     bool idleWait = false;      // waiting for a link; the re-registration timer runs from when this started
     uint32_t idleStart = 0;
     int apCfgState = -1;        // Wi-Fi hotspot config: -1 not checked yet, 0 none, 1 present
@@ -901,7 +908,7 @@ static void* wirelessThread(void*) {
             if ((quiet++ % 30) == 0)
                 printf("[Wireless] [%9.3f] waiting for %s (%s)\n", upSec(), dev, strerror(errno));
             uint32_t now = monoSecs();
-            if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); }
+            if (!idleWait) { idleWait = true; idleStart = now; rereg.reset(now); reregGaveUpLogged = false; }
             else if (g_btMgr && rereg.due(now)) {
                 char why[96];
                 snprintf(why, sizeof(why), "no Android Auto Bluetooth link for %u s (try %d)",
@@ -910,6 +917,11 @@ static void* wirelessThread(void*) {
                 if (rereg.nextIntervalSec() != nbt::sppReregIntervalSec(rereg.attempts() - 1, nbt::sppReregBaseSec()))
                     printf("[Wireless] still no Android Auto Bluetooth link: re-registering every %d s from now on\n",
                            rereg.nextIntervalSec());
+            } else if (rereg.gaveUp() && !reregGaveUpLogged) {
+                reregGaveUpLogged = true;
+                printf("[Wireless] no Android Auto Bluetooth link for %u s after %d re-registrations: the service stays "
+                       "registered, no more re-registering until a link or session ends (NBT_SPP_REREG_MAX_S=%d)\n",
+                       (unsigned)(now - idleStart), rereg.attempts(), rereg.maxSec());
             }
             usleep(500000);
             continue;
@@ -1696,7 +1708,8 @@ static void onKnobEvent(const nbt::car::CcsEvent& ev, void* user) {
     }
 }
 
-#define NBT_AAD_BUILD "v1.9.45-camctx"
+#define NBT_AAD_BUILD "v1.9.46-hardening"
+
 // ---- log destination ------------------------------------------------------------------------------------------
 // Default: no USB file; stdout (which the iDrive app sends to /dev/null) goes to the RAM log /dev/shmem/nbt-aad.log
 // (5 MB cap, see stdoutToRamOrNull); from a shell it stays on the terminal / the user's redirect. NBT_LOG_FILE=<path> forces a file. The iDrive app's "Save logs to USB" checkbox (flag

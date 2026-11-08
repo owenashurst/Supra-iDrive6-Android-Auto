@@ -40,6 +40,15 @@ static uint32_t monoMs() {
 // session are ever not application data.
 static const uint32_t kMaxUndecrypted = 16;
 
+// v1.9.46: consecutive decrypt failures AFTER the session has decrypted frames. The TLS records are AES-GCM with the
+// sender's sequence number as the nonce, so once a record is lost or torn nothing later in the stream decrypts either.
+// Until v1.9.45 such a session stayed up for as long as the phone kept sending: the picture froze, every frame printed
+// three log lines (one of them a hex dump), the socket data kept the no-data timeout from firing, and the listener
+// refused the phone's reconnects because this session still held the slot. Now the session ends after this many
+// failures in a row (about half a second of video), and the phone reconnects as after any dropped session.
+static const uint32_t kMaxUndecryptedRun = 32;
+static const uint32_t kUndecryptedRunLogFirst = 3;   // log the first few of a run in full, then only the end
+
 AASession::AASession()
     : client_fd_(-1),
       running_(0),
@@ -60,6 +69,7 @@ AASession::AASession()
       rx_records_(0),
       decrypted_any_(false),
       undecrypted_(0),
+      undecrypted_run_(0),
       rx_note_count_(0),
       rx_start_s_(0) {
     pthread_mutex_init(&lifecycle_mutex_, NULL);
@@ -465,6 +475,7 @@ bool AASession::start(int client_fd) {
     rx_records_ = 0;
     decrypted_any_ = false;
     undecrypted_ = 0;
+    undecrypted_run_ = 0;
     rx_note_count_ = 0;
     rx_start_s_ = monoS();
     memset(av_session_, 0, sizeof(av_session_));
@@ -1266,11 +1277,14 @@ void AASession::sessionLoop() {
             if (flags & 0x08) {
                 checkRxRecord(channel, flags, payload);
                 if (!cryptor_.decrypt(&payload[0], payload.size(), decrypted_chunk)) {
-                    printf("[AASession] Failed to decrypt encrypted frame (%u bytes): %s; %u bytes queued for the phone\n",
-                           length, cryptor_.lastError(), (unsigned)cryptor_.pendingOut());
-                    printf("            Raw: ");
-                    for (size_t i = 0; i < payload.size() && i < 24; ++i) printf("%02X ", payload[i]);
-                    printf("\n");
+                    ++undecrypted_run_;
+                    if (!decrypted_any_ || undecrypted_run_ <= kUndecryptedRunLogFirst) {
+                        printf("[AASession] Failed to decrypt encrypted frame (%u bytes): %s; %u bytes queued for the "
+                               "phone\n", length, cryptor_.lastError(), (unsigned)cryptor_.pendingOut());
+                        printf("            Raw: ");
+                        for (size_t i = 0; i < payload.size() && i < 24; ++i) printf("%02X ", payload[i]);
+                        printf("\n");
+                    }
                     reassembly_[channel].clear();
                     reassembly_total_.erase(channel);
                     reassembly_wire_.erase(channel);
@@ -1281,8 +1295,18 @@ void AASession::sessionLoop() {
                                "still in an earlier session, ending this one\n", (unsigned)undecrypted_);
                         break;
                     }
+                    // An established session whose stream no longer decrypts never recovers (see kMaxUndecryptedRun).
+                    if (decrypted_any_ && undecrypted_run_ >= kMaxUndecryptedRun) {
+                        printf("[AASession] %u encrypted frames in a row could not be decrypted after %u that could: "
+                               "the TLS stream is out of step, ending the session so the phone can reconnect\n",
+                               (unsigned)undecrypted_run_, (unsigned)rx_records_);
+                        break;
+                    }
                     continue;
                 }
+                if (decrypted_any_ && undecrypted_run_)
+                    printf("[AASession] decrypting again after %u failed frames\n", (unsigned)undecrypted_run_);
+                undecrypted_run_ = 0;
                 decrypted_any_ = true;
             } else {
                 decrypted_chunk = payload;

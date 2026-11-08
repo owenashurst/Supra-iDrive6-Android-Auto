@@ -269,6 +269,7 @@ private:
     uint32_t rx_records_;
     bool decrypted_any_;       // session thread: see outcome()
     uint32_t undecrypted_;     // session thread: frames that failed to decrypt before the first one that didn't
+    uint32_t undecrypted_run_; // session thread: consecutive failures since the last frame that decrypted
 
     // The last frames from the phone (session thread), printed when the phone goes silent.
     struct RxNote { double t; uint8_t channel; uint8_t flags; uint16_t length; uint16_t msg_id; };

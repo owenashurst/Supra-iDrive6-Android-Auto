@@ -6,6 +6,7 @@
 #   make -C tests run-test_pcm   build and run one test
 #   make -C tests tsan           test_session_lifecycle under ThreadSanitizer only
 # Tests run from milestone-7, so fixture paths are relative to it.
+# No Linux g++ at hand (Windows, macOS): tests/host.Dockerfile builds an image with everything the suite needs.
 
 ROOT := ..
 OUT  := build
@@ -27,6 +28,7 @@ SRC_KOMBI_NAV := src/cluster/j29_client.cpp src/cluster/j29_display.cpp src/clus
 # Each test and the daemon sources it links (beyond its own .cpp).
 SRC_test_aa_proto          := src/wireless_setup.cpp
 SRC_test_aa_sensor_msg     :=
+SRC_test_aa_surface_poll   :=
 SRC_test_alt_wifi          := src/wireless_setup.cpp
 SRC_test_ap_candidates     := src/wireless_setup.cpp
 SRC_test_audio_acks        := src/audio/audio_acks.cpp
@@ -53,6 +55,7 @@ SRC_test_hud6wa            := $(SRC_KOMBI_NAV)
 SRC_test_hud_terminal      := src/cluster/hud_terminal.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_hudterm           :=
 SRC_test_j29_golden        := $(SRC_KOMBI_NAV)
+SRC_test_frame_queue       :=
 SRC_test_input_activity    := src/car/input_activity.cpp src/car/ccs_input.cpp src/most/client.cpp tests/fake_dsi_client.cpp
 SRC_test_kombi_graph       :=
 SRC_test_kombi_nav         := $(SRC_KOMBI_NAV)
@@ -77,10 +80,12 @@ SRC_test_ptt               :=
 SRC_test_route_policy      :=
 SRC_test_sdr               := src/sdr_builder.cpp
 SRC_test_sdr_drop          := src/sdr_builder.cpp
+SRC_test_spp_rereg         :=
 SRC_test_video_geometry    := src/sdr_builder.cpp
 SRC_test_session_control   := src/aa_cryptor.cpp src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_lifecycle := src/aa_cryptor.cpp src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_bye       := src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
+SRC_test_session_decrypt_fail := src/aa_session.cpp src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_owner     :=
 SRC_test_session_sensors   := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
 SRC_test_session_rx_timeout := src/audio/audio_acks.cpp src/crash_handler.cpp src/sdr_builder.cpp
@@ -133,8 +138,10 @@ $(foreach t,$(TESTS),$(eval $(call TEST_RULES,$(t))))
 $(OUT)/test_session_sensors: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
 $(OUT)/test_session_rx_timeout: $(ROOT)/src/aa_session.cpp $(ROOT)/src/aa_session.hpp $(ROOT)/src/aa_sensor_msg.hpp $(ROOT)/src/aa_proto.hpp stub_cryptor.hpp
 
-# Frames are not really encrypted in this one, so it can script the phone without a TLS handshake.
+# Frames are not really encrypted in these, so they can script the phone without a TLS handshake (and make its
+# frames stop decrypting on demand).
 $(OUT)/test_session_bye: CXXFLAGS += -include stub_cryptor.hpp
+$(OUT)/test_session_decrypt_fail: CXXFLAGS += -include stub_cryptor.hpp
 
 # Not here: rhmiapp_host_test, which dlopens a host build of rhmiapp/libNbtAad.so linked against
 # rhmiapp_fake_appframework.cpp.

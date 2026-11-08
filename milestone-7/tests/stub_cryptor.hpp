@@ -9,6 +9,10 @@
 #include <stddef.h>
 #include <vector>
 namespace nbt {
+// A test flips this to make every decrypt() fail, as a TLS stream that lost a record does for the rest of the session.
+// One function-local static, so the test and aa_session.cpp (separate translation units) see the same flag.
+inline bool& stubDecryptFail() { static bool fail = false; return fail; }
+
 class AACryptor {
 public:
     AACryptor() {}
@@ -18,8 +22,12 @@ public:
     bool processHandshakeData(const uint8_t*, size_t, std::vector<uint8_t>&) { return false; }
     bool isHandshakeComplete() const { return false; }
     bool encrypt(const uint8_t* d, size_t n, std::vector<uint8_t>& o) { o.assign(d, d + n); return true; }
-    bool decrypt(const uint8_t* d, size_t n, std::vector<uint8_t>& o) { o.assign(d, d + n); return true; }
-    const char* lastError() const { return ""; }
+    bool decrypt(const uint8_t* d, size_t n, std::vector<uint8_t>& o) {
+        if (stubDecryptFail()) return false;
+        o.assign(d, d + n);
+        return true;
+    }
+    const char* lastError() const { return stubDecryptFail() ? "stub: decrypt forced to fail" : ""; }
     size_t pendingOut() const { return 0; }
 };
 }

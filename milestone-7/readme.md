@@ -289,6 +289,21 @@ companion app, developer mode, or "Start head unit server". iDrive's own binarie
 > to P or pull the handbrake. `DRIVING_STATUS` still stays 0. `NBT_CAR_GEAR=0` and `NBT_CAR_PARKING_BRAKE=0` turn them off.
 > Daemon log: `[Vehicle] gear: PARK (raw 3, from MOST)`, `[Vehicle] parking brake: on (raw 2)`, `[AASession] >>> Sensor GEAR
 > event #N`, `[AASession] >>> Sensor PARKING_BRAKE event #N`.
+>
+> **v1.9.46-hardening (not car-verified): long-run behaviour.** From a code audit for "laggy, crashes after weeks",
+> each with a host test where the code can be reached from one (FIXES.md 12-17):
+> - An established session whose encrypted frames stop decrypting (a lost TLS record: nothing later decrypts) ended
+>   only when the phone gave up; the picture froze, three log lines per frame, reconnects refused. Now 32 failures in a
+>   row end it and the phone reconnects. Log: `[AASession] 32 encrypted frames in a row could not be decrypted ...`.
+> - The Bluetooth re-registration while no phone opens the link (5 s for 2 min, then every 30 s) now stops after
+>   `NBT_SPP_REREG_MAX_S` seconds per idle period (default 720; `0` = the old no-limit behaviour). The service stays
+>   registered. Log: `[Wireless] no Android Auto Bluetooth link for N s after M re-registrations: ... no more`.
+> - Video frames pass through the decoder queue without being copied (they were deep-copied about 15 times per frame
+>   when the queue was full, under the lock the network thread needs). Same cap and drop rules (`src/frame_queue.hpp`).
+> - The `LayerManagerControl` probe for surface 1282 (two forked processes a second for the rest of the run when the
+>   surface never appeared) now stops 60 s after the window was created (`src/aa_surface_poll.hpp`).
+> - A `/dev/name/local/mdev` connection leaked per connect attempt while `mmr_context_create` failed; closed first now.
+> - The microphone capture thread spun at full CPU when A2I gave a notification with no buffer; it sleeps 2 ms now.
 
 > NBT-AAD is free of charge. Selling it, or bundling it with anything sold, is not permitted.
 > If you paid for it, you were scammed. Official releases are published only at
@@ -746,6 +761,7 @@ Leave these unset unless you are testing.
 | `NBT_ALT_WIFI=DIRECT\|CARPLAY`, `NBT_WFD_IF`, `NBT_WFD_SSID` | **Default `CARPLAY`**; also the Settings checkbox **Use WiFi Direct Network** (= `DIRECT`; a set `NBT_ALT_WIFI` wins). `BOTH` was removed in v1.9.37 and now means `CARPLAY`. Which Wi-Fi the phone is offered, one per run with no fallback. `CARPLAY` (unset) = the CarPlay hotspot. `DIRECT` = the car's Wi-Fi Direct group only, no fallback (for cars without the CarPlay licence, where `iap2.cfg` is missing but `wfd0` runs because Miracast is coded): passphrase decoded from `/var/opt/conn/WFDPass.conf` (hex, XOR `NBTEvo0715`), SSID from `NBT_WFD_SSID`, `ifconfig <if>`, `mwud` 127.0.0.1:9096, or derived as `DIRECT-03-` + the WLAN device name from the WLAN persistency (the J29: `DIRECT-03-Toyota51807`). `NBT_WFD_IF` (default `wfd0`) and `NBT_WFD_SSID` pin the interface and the group name. The passphrase is logged once per value so it can be typed into a phone by hand. Not car-verified yet |
 | `NBT_SPP_UUID_CON` | Connect UUID registered with the car's SPP service (default = AA UUID) |
 | `NBT_SPP_REREG_S` | While no Android Auto Bluetooth link is open, register the service again every this many seconds for 2 minutes, then every 30 s (default 5; `0` = off) |
+| `NBT_SPP_REREG_MAX_S` | ... for at most this many seconds per idle period, then stop until a link or session ends (default 720 = 12 min; `0` = no limit, the behaviour before v1.9.46) |
 | `NBT_BT_TRACE` | `1` = read-only Bluetooth diagnostics: log, with uptime, when the phone connects to / drops from the car over Bluetooth and which services it has (`DeviceListChanged: phone ... is connected`), to see why the phone does not open the Android Auto link after the car sleeps and wakes. Off by default, not car-verified |
 | `NBT_VOICE_SCENARIO_NAME` | Speech scenario name, e.g. `Carplay_Siri_1mic_RefCh` |
 | `NBT_BT_SRC`, `NBT_BT_SINK`, `NBT_BT_RELEASE=1` | Audio source/sink for Bluetooth mode (default `0x3a` / `0x1`); release the source when the phone leaves |

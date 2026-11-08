@@ -358,7 +358,11 @@ void A2ICaptureStream::workerLoop() {
         void* buf = NULL;
         size_t size = 0;
         if (A2I_Client_GetBuffer(handle_, &buf, &size) != 0 || !buf || size == 0) {
-            ++getbuf_fail;
+            // Never spin (same as the playback loop): a notification with no buffer behind it would otherwise run
+            // this thread flat out, and every failed call can write a slog line inside the library.
+            if ((getbuf_fail++ % 500) == 0)
+                printf("[%s] GetBuffer failed after a notification (%u so far)\n", name_, getbuf_fail);
+            usleep(2000);
             continue;
         }
         ++chunks_;

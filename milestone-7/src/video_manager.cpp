@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Required Notice: Copyright (c) 2026 nanaisu - NBT-AAD (https://github.com/Sq00ky/Supra-iDrive6-Android-Auto)
 #include "video_manager.hpp"
+#include "aa_surface_poll.hpp"
 #include "car_config.hpp"
 #include "lm_geometry.hpp"
 #include <stdio.h>
@@ -803,7 +804,11 @@ bool VideoManager::createDecoder() {
         printf("[VideoManager] Notice: mmr_context_create returned NULL\n");
     }
 
-    // Connect to hardware video engine (/dev/name/local/mdev)
+    // Connect to hardware video engine (/dev/name/local/mdev). A previous attempt may have left this open: when
+    // mmr_context_create fails above, mmr_ctxt_ stays NULL, prepareForSession() calls createDecoder() again on the
+    // next phone connection, and until v1.9.45 the handle from the last attempt was overwritten without being closed
+    // (one leaked connection per connect attempt while mm-renderer was unwell).
+    if (mdev_fd_ >= 0) { name_close(mdev_fd_); mdev_fd_ = -1; }
     mdev_fd_ = name_open("/dev/name/local/mdev", 0);
     if (mdev_fd_ >= 0) {
         printf("[VideoManager] Connected to hardware video engine (/dev/name/local/mdev, fd: %d)\n", mdev_fd_);
@@ -1231,7 +1236,16 @@ void VideoManager::serviceAaSurface() {
     if (aa_surface_seen_ && aa_surface_logged_) return;
     ++aa_surface_ticks_;
     if (!aa_surface_seen_) {
-        if (aa_surface_ticks_ % 2) return;                    // every other 250 ms tick until it is there
+        // Every 500 ms for 10 s, then every 5 s until 60 s, then no more (aa_surface_poll.hpp): each probe forks a
+        // shell and LayerManagerControl, and until v1.9.45 a car whose surface never appeared ran two a second for
+        // the rest of the run. A new window (createWindow) starts the schedule again.
+        if (aaSurfacePollJustGaveUp(aa_surface_ticks_)) {
+            printf("[VideoManager] LayerManager surface %d did not appear within %u s of the window '%s': not asking "
+                   "again until the window is created anew\n", aaSurface(),
+                   kAaSurfaceGiveUpTicks * kAaSurfaceTickMs / 1000u, aaWindowId());
+            return;
+        }
+        if (!aaSurfacePollDue(aa_surface_ticks_)) return;
         char cmd[96];
         snprintf(cmd, sizeof(cmd), "/opt/sys/bin/LayerManagerControl get surface %d 2>&1", aaSurface());
         FILE* p = popen(cmd, "r");
@@ -1451,7 +1465,7 @@ bool VideoManager::postCodecConfig(const uint8_t* data, size_t length) {
     item.has_inline_config = false;
     item.raw_size = length;
     item.inline_config_size = 0;
-    frame_queue_.push_back(item);
+    frame_queue_.push(item);   // config packets are not subject to the cap
     pthread_cond_signal(&queue_cond_);
     pthread_mutex_unlock(&queue_mutex_);
     return true;
@@ -1480,28 +1494,6 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
         wait_idr_ = false;
         printf("[VideoManager] keyframe after the decoder rebuild (%u frames without one dropped)\n", idr_dropped_);
     }
-    if (frame_queue_.size() >= 15) {
-        bool dropped = false;
-        size_t dropped_size = 0;
-        for (std::vector<VideoQueueItem>::iterator it = frame_queue_.begin(); it != frame_queue_.end(); ++it) {
-            if (!it->is_config && !it->is_idr) {   // never sacrifice a keyframe
-                dropped_size = it->data.size();
-                frame_queue_.erase(it);
-                dropped = true;
-                break;
-            }
-        }
-        if (!dropped) {
-            printf("[VideoManager] Warning: video queue full of codec config packets; rejecting %u byte frame.\n",
-                   static_cast<unsigned int>(length));
-            pthread_mutex_unlock(&queue_mutex_);
-            return false;
-        }
-        printf("[VideoManager] Warning: video queue full; dropped oldest non-config frame (%u bytes), queued=%u.\n",
-               static_cast<unsigned int>(dropped_size),
-               static_cast<unsigned int>(frame_queue_.size()));
-    }
-    dumpVideo(data, length, false);
     VideoQueueItem item;
     item.raw_size = length;
     item.inline_config_size = cached_codec_config_.size();
@@ -1516,9 +1508,24 @@ bool VideoManager::postVideoFrame(const uint8_t* data, size_t length, uint64_t p
     item.pts = pts;
     item.is_config = false;
     item.is_idr = looksLikeIdr(data, length);
-    frame_queue_.push_back(item);
-    pthread_cond_signal(&queue_cond_);
+    // The queue takes the bytes (no copy), and drops the oldest plain frame when it is full (frame_queue.hpp).
+    const FrameQueue::PushResult pushed = frame_queue_.push(item);
+    const size_t queued = frame_queue_.size();
+    const size_t dropped_size = frame_queue_.lastDroppedSize();
+    if (pushed != FrameQueue::kRejectedFullOfConfig) pthread_cond_signal(&queue_cond_);
     pthread_mutex_unlock(&queue_mutex_);
+    // Log after the unlock: with a slow log destination (USB stick) a printf under queue_mutex_ stalled the worker
+    // and, through it, the session thread.
+    if (pushed == FrameQueue::kRejectedFullOfConfig) {
+        printf("[VideoManager] Warning: video queue full of codec config packets; rejecting %u byte frame.\n",
+               static_cast<unsigned int>(length));
+        return false;
+    }
+    if (pushed == FrameQueue::kQueuedDroppedOldest) {
+        printf("[VideoManager] Warning: video queue full; dropped oldest non-config frame (%u bytes), queued=%u.\n",
+               static_cast<unsigned int>(dropped_size), static_cast<unsigned int>(queued));
+    }
+    dumpVideo(data, length, false);
     return true;
 }
 
@@ -1535,8 +1542,7 @@ void VideoManager::workerLoop() {
             pthread_mutex_unlock(&queue_mutex_);
             break;
         }
-        item = frame_queue_.front();
-        frame_queue_.erase(frame_queue_.begin());
+        frame_queue_.pop(item);   // not empty here; takes the bytes without a copy
         size_t queued_after_pop = frame_queue_.size();
         bool do_reset = reset_pending_;
         reset_pending_ = false;
