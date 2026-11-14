@@ -310,6 +310,52 @@ int main() {
         assert(describeLanes(k) == "RIGHT* TIGHT_LEFT TIGHT_RIGHT UTURN_LEFT UTURN_RIGHT HALF_RIGHT");
         assert(laneArrow(10) == -1 && laneArrow(-1) == -1);
     }
+    // the fields only the maneuver log line uses: where the maneuver came from, exit number, side, legacy event, and
+    // which roundabout types name a direction (the generic enter / exit types name none)
+    {
+        NavView v;
+        assert(viewFromMessages(msgs(navState(30, "R", 90), Bytes()), v));
+        assert(v.src == 1 && v.has_exit_number && v.exit_number == 2 && v.has_exit_angle && v.exit_angle == 90);
+        assert(!v.has_turn_side && v.legacy_event == -1);
+        assert(viewFromMessages(msgs(navState(34, "R"), Bytes()), v));
+        assert(v.src == 1 && !v.has_exit_number && !v.has_exit_angle);
+        NavMessages m;
+        Bytes s = status(1), ev, de;
+        m.store(0x8003, &s[0], s.size());
+        fStr(ev, 1, "ELM ST"); fInt(ev, 2, 2); fInt(ev, 3, 11); fInt(ev, 5, 3); fInt(ev, 6, 120);
+        fInt(de, 1, 300); fInt(de, 2, 20); fInt(de, 3, 200000); fInt(de, 4, 6);
+        m.store(0x8004, &ev[0], ev.size());
+        m.store(0x8005, &de[0], de.size());
+        assert(viewFromMessages(m, v));
+        assert(v.src == 2 && v.has_turn_side && v.turn_side == 2 && v.legacy_event == 11);
+        assert(v.has_exit_number && v.exit_number == 3 && v.has_exit_angle && v.exit_angle == 120);
+        assert(v.aa_type == 32 && roundaboutGroup(32) == 1);       // legacy roundabout, turn side right -> clockwise
+        assert(roundaboutGroup(30) == 3 && roundaboutGroup(31) == 3 && roundaboutGroup(34) == 2 &&
+               roundaboutGroup(35) == 2 && roundaboutGroup(33) == 1 && roundaboutGroup(7) == 0);
+    }
+    // ManeuverLog: one line per change of the maneuver fields, none for a repeat or for a changed distance, again
+    // after reset(); it says when a roundabout type names no direction. No road name in the line.
+    {
+        ManeuverLog log;
+        char line[320];
+        NavView v;
+        assert(viewFromMessages(msgs(navState(30, "SECRET RD", 90), Bytes()), v));
+        assert(log.next(v, line, sizeof(line)));
+        assert(strstr(line, "maneuver from NavigationState: type 30 -> KOMBI direction 15 (roundabout: type names no direction"));
+        assert(strstr(line, "exit angle 90, exit number 2") && !strstr(line, "SECRET"));
+        v.step_m = 120; v.has_step_m = true;                        // the distance changes every tick: no new line
+        assert(!log.next(v, line, sizeof(line)));
+        assert(viewFromMessages(msgs(navState(32, "SECRET RD", 90), Bytes()), v));
+        assert(log.next(v, line, sizeof(line)) && strstr(line, "type 32 -> KOMBI direction 14 (roundabout: type says clockwise)"));
+        assert(viewFromMessages(msgs(navState(32, "SECRET RD", 45), Bytes()), v));   // same type, other exit angle
+        assert(log.next(v, line, sizeof(line)) && strstr(line, "exit angle 45"));
+        assert(!log.next(v, line, sizeof(line)));
+        log.reset();
+        assert(log.next(v, line, sizeof(line)));
+        assert(viewFromMessages(msgs(navState(7, "R"), Bytes()), v));
+        assert(log.next(v, line, sizeof(line)) && strstr(line, "type 7 -> KOMBI direction 6, exit angle -, exit number -"));
+        assert(!strstr(line, "roundabout"));
+    }
     printf("test_kombi_nav_msg OK\n");
     return 0;
 }

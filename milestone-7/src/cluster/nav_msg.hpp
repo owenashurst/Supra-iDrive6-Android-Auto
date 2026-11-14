@@ -111,9 +111,17 @@ struct NavView {
     int64_t dest_m;
     bool has_exit_angle;
     int64_t exit_angle;
+    // What the phone sent besides the type, kept only for the maneuver log line (nothing draws from these).
+    int src;                 // 1 = NavigationState (0x8006), 2 = the legacy NextTurnEvent, 0 = none
+    bool has_exit_number;
+    int64_t exit_number;
+    bool has_turn_side;      // legacy NextTurnEvent only: 1 = left, 2 = right
+    int64_t turn_side;
+    int64_t legacy_event;    // legacy NextTurnEvent only: the event number, -1 = none
     std::vector<AaLane> lanes;   // the step's lanes, left to right (the phone sends them only near the junction)
     NavView() : aa_type(0), aa_unit(0), has_step_m(false), step_m(0), has_step_s(false), step_s(0), pos_seq(0), step_pos_seq(0),
-                has_dest_m(false), dest_m(0), has_exit_angle(false), exit_angle(0) {}
+                has_dest_m(false), dest_m(0), has_exit_angle(false), exit_angle(0),
+                src(0), has_exit_number(false), exit_number(0), has_turn_side(false), turn_side(0), legacy_event(-1) {}
 
     bool sameManeuver(const NavView& o) const {
         return aa_type == o.aa_type && road == o.road && has_exit_angle == o.has_exit_angle &&
@@ -156,6 +164,8 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         int64_t x;
         if (pbInt(man, 1, x)) v.aa_type = (int)x;
         if (pbInt(man, 3, x)) { v.has_exit_angle = true; v.exit_angle = x; }
+        v.src = 1;
+        if (pbInt(man, 2, x)) { v.has_exit_number = true; v.exit_number = x; }
         v.road = pbText(pbMsg(step, 2), 1);
         // step field 3: repeated NavigationLane {1 repeated LaneDirection {1 shape, 2 is_highlighted}}
         PbReader lr(step.data, step.len);
@@ -189,6 +199,11 @@ inline bool viewFromMessages(const NavMessages& m, NavView& v) {
         v.aa_type = has_side && side == 1 ? pl : has_side && side == 2 ? pr : (pl == pr ? pl : 0);
         v.road = pbText(ev, 1);
         if (pbInt(ev, 6, x)) { v.has_exit_angle = true; v.exit_angle = x; }
+        v.src = 2;
+        v.has_turn_side = has_side;
+        v.turn_side = side;
+        v.legacy_event = event;
+        if (pbInt(ev, 5, x)) { v.has_exit_number = true; v.exit_number = x; }
     } else {
         return false;
     }
@@ -249,6 +264,63 @@ inline int kombiDirection(int aa_type) {
         default: return 1;                   // depart, straight, name change, ferry, unknown
     }
 }
+
+// The roundabout types by the grouping kombiDirection() uses: 1 = drawn clockwise (32, 33, 43, 44), 2 = drawn
+// counter-clockwise because the type names a direction (34, 35, 45, 46), 3 = drawn counter-clockwise only because the
+// type names none (30, 31: nothing says which way round), 0 = not a roundabout. Only the log line uses it.
+inline int roundaboutGroup(int aa_type) {
+    switch (aa_type) {
+        case 32: case 33: case 43: case 44: return 1;
+        case 34: case 35: case 45: case 46: return 2;
+        case 30: case 31: return 3;
+        default: return 0;
+    }
+}
+
+// One log line per change of what the phone says about the next maneuver, so a parked or driven run shows which type,
+// exit angle and exit number Android Auto sent for each junction and what the cluster would draw for it. Maneuver
+// fields only: no road name, no position. Pure: next() fills `line` and returns true when the fields differ from the
+// last line it gave; reset() (guidance ended) makes the next maneuver log again.
+class ManeuverLog {
+public:
+    ManeuverLog() : have_(false) {}
+    void reset() { have_ = false; }
+    bool next(const NavView& v, char* line, size_t n) {
+        if (have_ && last_.aa_type == v.aa_type && last_.has_exit_angle == v.has_exit_angle &&
+            (!v.has_exit_angle || last_.exit_angle == v.exit_angle) && last_.has_exit_number == v.has_exit_number &&
+            (!v.has_exit_number || last_.exit_number == v.exit_number) && last_.src == v.src &&
+            last_.has_turn_side == v.has_turn_side && (!v.has_turn_side || last_.turn_side == v.turn_side) &&
+            last_.legacy_event == v.legacy_event)
+            return false;
+        have_ = true;
+        last_.aa_type = v.aa_type; last_.src = v.src;
+        last_.has_exit_angle = v.has_exit_angle; last_.exit_angle = v.exit_angle;
+        last_.has_exit_number = v.has_exit_number; last_.exit_number = v.exit_number;
+        last_.has_turn_side = v.has_turn_side; last_.turn_side = v.turn_side;
+        last_.legacy_event = v.legacy_event;
+        char angle[24] = "-", num[24] = "-", side[24] = "-", ev[24] = "-";
+        if (v.has_exit_angle) snprintf(angle, sizeof(angle), "%lld", (long long)v.exit_angle);
+        if (v.has_exit_number) snprintf(num, sizeof(num), "%lld", (long long)v.exit_number);
+        if (v.has_turn_side) snprintf(side, sizeof(side), "%lld", (long long)v.turn_side);
+        if (v.legacy_event >= 0) snprintf(ev, sizeof(ev), "%lld", (long long)v.legacy_event);
+        const char* note = "";
+        switch (roundaboutGroup(v.aa_type)) {
+            case 1: note = " (roundabout: type says clockwise)"; break;
+            case 2: note = " (roundabout: type says counter-clockwise)"; break;
+            case 3: note = " (roundabout: type names no direction, drawn counter-clockwise)"; break;
+            default: break;
+        }
+        snprintf(line, n, "maneuver from %s: type %d -> KOMBI direction %d%s, exit angle %s, exit number %s, turn side %s, "
+                          "legacy event %s, %lld m, %lld s",
+                 v.src == 1 ? "NavigationState" : v.src == 2 ? "NextTurnEvent" : "?", v.aa_type, kombiDirection(v.aa_type),
+                 note, angle, num, side, ev, (long long)(v.has_step_m ? v.step_m : -1),
+                 (long long)(v.has_step_s ? v.step_s : -1));
+        return true;
+    }
+private:
+    bool have_;
+    NavView last_;
+};
 
 // ---- lanes -> the KOMBI lane model (car-verified 2026-11-01: lane row on the cluster and the HUD) -------------------
 // AA lane shape -> KOMBI lane arrow (the same enum as the maneuver direction). Car-matched: STRAIGHT 1, NORMAL_LEFT 6,

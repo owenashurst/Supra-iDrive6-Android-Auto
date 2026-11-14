@@ -663,8 +663,12 @@ void KombiNav::tick(double now) {
     const NavView* pv = NULL;
     const char* why = "guidance ended";
     if (guidance && viewFromMessages(m, v)) {
+        char mline[320];
+        if (maneuver_log_.next(v, mline, sizeof(mline))) printf("[KombiNav] %s\n", mline);
         if (now - last_msg > settings_.nav_stale_s) why = "navigation status frozen";
         else pv = &v;
+    } else if (!guidance) {
+        maneuver_log_.reset();
     }
     core_->step(pv, now, why);
     if (core_->takeFallback() && !fallback_noted_) {

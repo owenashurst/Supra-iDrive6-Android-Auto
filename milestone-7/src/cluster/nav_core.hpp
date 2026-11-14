@@ -228,6 +228,7 @@ private:
     bool shadow_;                    // 6wa: NBT_HUDTERM=log
     std::string target_;             // for the log: what the driver talks to
     const char* stopHint_;           // for the log: why a driver may stop for the session
+    ManeuverLog maneuver_log_;       // one "maneuver from ..." line per change of the phone's maneuver fields
     bool stale_shown_;               // a picture a killed daemon left: cleared once the transport is ready
     ClusterDisplay* display_;
     Core* core_;
