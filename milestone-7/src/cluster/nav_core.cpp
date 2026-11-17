@@ -408,7 +408,22 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
         link.send = &KombiNav::linkSend;
         link.cancel = &KombiNav::linkCancel;
         link.user = this;
-        display_ = new J29Display(*graph_, link);
+        J29Display* j29 = new J29Display(*graph_, link);
+        display_ = j29;
+        // NBT_J29_PROBE=1: the parked direction-enum test (cluster/j29_probe.hpp). Off unless set.
+        std::string probe_note;
+        DirectionProbe probe = DirectionProbe::fromEnv(getenv("NBT_J29_PROBE"), getenv("NBT_J29_PROBE_FROM"),
+                                                       getenv("NBT_J29_PROBE_TO"), getenv("NBT_J29_PROBE_S"),
+                                                       &probe_note);
+        if (probe.on()) {
+            if (!probe_note.empty()) printf("[KombiNav] J29 probe:%s\n", probe_note.c_str());
+            j29->setProbe(probe);
+            settings_.approach = kApproachOff;   // the arrow must be up for the test, not only near a turn
+            settings_.approach_mi = 0;
+            printf("[KombiNav] J29 DIRECTION PROBE ON (parked tests only): directions %d..%d, %d s each, the number "
+                   "is written into the road-name line; the phone's own directions are not shown\n",
+                   probe.from(), probe.to(), probe.seconds());
+        }
         char t[64];
         snprintf(t, sizeof(t), "KOMBI at %s:%u", host_.c_str(), (unsigned)port_);
         target_ = t;

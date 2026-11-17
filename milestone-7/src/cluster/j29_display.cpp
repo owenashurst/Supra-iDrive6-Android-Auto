@@ -51,19 +51,39 @@ bool J29Display::sameManeuver(const NavView& v, double now) {
     return lanes != shown_lanes_ && now - t_graph_ >= s_.lane_resend_s;
 }
 
+// With the parked direction probe on (cluster/j29_probe.hpp) the probe's value and its road text replace the phone's;
+// a value the KOMBI rejects is logged and skipped, it does not stop the session.
 ClusterDisplay::Result J29Display::showManeuver(const NavView& v, double now, bool isNew, bool first) {
-    int dir = kombiDirection(v.aa_type), ku = kombiUnit(v.aa_unit);
+    if (!probe_.on()) return draw(v, now, isNew, first);
+    Result r = draw(v, now, isNew, first);
+    probe_.drawn(now);
+    if (r == kRejected) {
+        log("[J29Probe] direction %d REJECTED by the KOMBI: skipped, the previous picture stays", probe_.value());
+        return kOk;
+    }
+    return r;
+}
+
+ClusterDisplay::Result J29Display::draw(const NavView& v, double now, bool isNew, bool first) {
+    int dir = probe_.on() ? probe_.value() : kombiDirection(v.aa_type), ku = kombiUnit(v.aa_unit);
+    const std::string road = probe_.on() ? probe_.road() : v.road;
+    if (probe_.on()) {
+        bool verified = false;
+        const char* name = probeName(dir, &verified);
+        log("[J29Probe] direction %d (%s%s) sent now, phone type %d", dir, name, verified ? ", car-verified" : "",
+            v.aa_type);
+    }
     std::vector<Frame> frames;
     KombiLanes lanes;
     lanesOf(v, lanes);
     std::string lane_note;
     if (!lanes.empty() || !isNew) lane_note = " | lanes " + describeLanes(lanes);
     log("%s type %d -> direction %d | %s %s | road '%s'%s", isNew ? "SHOW" : "LANES", v.aa_type, dir,
-        v.dist_text.c_str(), kombiUnitName(ku), v.road.c_str(), lane_note.c_str());
+        v.dist_text.c_str(), kombiUnitName(ku), road.c_str(), lane_note.c_str());
     const KombiLanes* lp = lanes.empty() ? NULL : &lanes;
     bool done = false;
     if (!first && !full_next_ && inplace_ok_ && s_.inplace > 0 &&
-        g_.maneuver(dir, v.road, v.dist_text, ku, frames, lp, s_.inplace != 2)) {
+        g_.maneuver(dir, road, v.dist_text, ku, frames, lp, s_.inplace != 2)) {
         KombiClient::Result r = sendLogged("maneuver", frames, false);
         if (r == KombiClient::kOk) {
             done = true;
@@ -75,7 +95,7 @@ ClusterDisplay::Result J29Display::showManeuver(const NavView& v, double now, bo
         }
     }
     if (!done) {
-        if (!g_.start(dir, v.road, v.dist_text, ku, frames, lp)) {
+        if (!g_.start(dir, road, v.dist_text, ku, frames, lp)) {
             log("internal error: the graph template has an unexpected layout");
             return kInternal;
         }
@@ -102,6 +122,11 @@ ClusterDisplay::Result J29Display::updateDistance(const NavView& v, double) {
 }
 
 ClusterDisplay::Result J29Display::keepUp(const NavView& v, double now) {
+    if (probe_.due(now)) {                               // the parked direction probe: the next value, in place
+        if (probe_.advance()) log("[J29Probe] sweep complete: starting again at %d", probe_.value());
+        Result r = showManeuver(v, now, false, false);
+        if (r != kOk) return r;
+    }
     if (shown_lanes_.empty()) return kOk;
     return feed(v, now, false);
 }

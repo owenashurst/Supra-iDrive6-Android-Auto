@@ -18,6 +18,7 @@
 #include "cluster/display.hpp"
 #include "cluster/j29_client.hpp"
 #include "cluster/j29_graph.hpp"
+#include "cluster/j29_probe.hpp"
 
 namespace nbt {
 namespace kombinav {
@@ -36,6 +37,8 @@ public:
     const char* name() const { return "j29"; }
     void setSettings(const Settings& s) { s_ = s; }
     void setLog(LogFn log, void* user) { log_fn_ = log; log_user_ = user; }
+    // The parked direction-enum test (cluster/j29_probe.hpp); off unless set with a probe that is on.
+    void setProbe(const DirectionProbe& p) { probe_ = p; }
 
     bool sameManeuver(const NavView& v, double now);
     Result showManeuver(const NavView& v, double now, bool isNew, bool first);
@@ -47,6 +50,7 @@ public:
     bool sentAny() const { return sent_any_; }
 
 private:
+    Result draw(const NavView& v, double now, bool isNew, bool first);   // showManeuver without the probe's handling
     KombiClient::Result sendLogged(const char* label, const std::vector<Frame>& frames, bool quiet);
     Result send(const char* label, const std::vector<Frame>& frames, bool quiet = false);
     Result feed(const NavView& v, double now, bool force);
@@ -66,6 +70,7 @@ private:
     double t_pos_;
     bool has_last_pos_;
     double last_pos_;
+    DirectionProbe probe_;
 };
 
 } // namespace kombinav
