@@ -552,6 +552,20 @@ static void testDepart() {
         r.feed(n.m, 9.1);
         assert(!r.core.shown() && hasLog("CLEAR (depart only)"));
     }
+    // depart_shown (the J29 direction probe turns it on): a DEPART at 0 m is a maneuver like any other, so the probe
+    // can draw while Maps sits on its depart step
+    {
+        Settings s = noApproach();
+        s.depart_shown = true;
+        Rig r(s);
+        Nav n;
+        n.step(1, "TOWARDS START RD");
+        n.pos(0, 0);
+        r.feed(n.m, 0.0);
+        r.feed(n.m, 3.5);                                            // past the wait for a distance, if there is one
+        assert(r.core.shown() && r.core.current().aa_type == 1 && countLog("DEPART") == 0);
+        assert(countLog("SHOW ") == 1 && r.k.count() > 0);
+    }
     // a DEPART with a distance of its own is drawn as before
     {
         Rig r;

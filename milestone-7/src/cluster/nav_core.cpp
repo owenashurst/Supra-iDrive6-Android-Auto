@@ -175,7 +175,7 @@ void Core::step(const NavView* in, double now, const char* why_none) {
     if (stop_ != kRunning) return;
     // A DEPART at 0 m counts as no guidance: after a reroute the arrow shown stays through it (and goes after grace_s,
     // as in any gap) instead of a straight arrow at 0 yd for a second, drawn and then replaced or cleared.
-    bool depart = in && departHere(*in);
+    bool depart = in && !s_.depart_shown && departHere(*in);
     if (depart) {
         if (!depart_) log("DEPART at 0 m: not shown%s", has_shown_ ? ", the arrow shown stays" : "");
         in = NULL;
@@ -420,8 +420,10 @@ bool KombiNav::createDisplay(const char* id, most::Client* most) {
             j29->setProbe(probe);
             settings_.approach = kApproachOff;   // the arrow must be up for the test, not only near a turn
             settings_.approach_mi = 0;
+            settings_.depart_shown = true;       // Maps often sits on its depart step while parked: draw on that too
             printf("[KombiNav] J29 DIRECTION PROBE ON (parked tests only): directions %d..%d, %d s each, the number "
-                   "is written into the road-name line; the phone's own directions are not shown\n",
+                   "is written into the road-name line; the phone's own directions are not shown, and Maps' depart "
+                   "step counts as a maneuver\n",
                    probe.from(), probe.to(), probe.seconds());
         }
         char t[64];

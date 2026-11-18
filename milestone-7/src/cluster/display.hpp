@@ -56,10 +56,12 @@ struct Settings {
                            // (NBT_HUD_JUNCTION=0 turns it off)
     double near_m;         // 6WA: the junction view comes in at the main prompt (kApproachTime), or this close
     bool hud_lanes;        // 6WA: the phone's lanes in their own layer (NBT_HUD_LANES=1; off until their place is known)
+    bool depart_shown;     // a DEPART at 0 m is drawn like any maneuver (the parked J29 direction probe, which has to
+                           // draw while Maps sits on the depart step); off: it counts as no guidance
     Settings() : approach(kApproachTime), warn_s(50), main_s(20), mway_warn_m(2000), mway_main_m(1000),
                  approach_mi(1.0), hysteresis(1.15), dist_chars(3), hide_bar(true), grace_s(8.0), first_dist_s(3.0),
                  min_update_s(0.5), nav_stale_s(300.0), lanes(true), lane_resend_s(3.0), lane_feed_s(1.0), inplace(1),
-                 junction(true), near_m(300), hud_lanes(false) {}
+                 junction(true), near_m(300), hud_lanes(false), depart_shown(false) {}
 };
 
 typedef void (*LogFn)(const char* line, void* user);
